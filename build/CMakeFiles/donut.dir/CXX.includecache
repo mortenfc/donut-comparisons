@@ -1,0 +1,20 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/s0001633/Repos/learn3d/donut.cpp
+utility
+-
+math.h
+-
+stdio.h
+-
+array
+-
+unistd.h
+-
+

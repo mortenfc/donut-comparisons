@@ -1,0 +1,3 @@
+/home/s0001633/Repos/learn3d/build/CMakeFiles/rebuild_cache.dir
+/home/s0001633/Repos/learn3d/build/CMakeFiles/edit_cache.dir
+/home/s0001633/Repos/learn3d/build/CMakeFiles/donut.dir
