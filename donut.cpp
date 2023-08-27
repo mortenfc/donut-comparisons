@@ -4,8 +4,8 @@
 #include <array>
 #include <unistd.h>
 
-constexpr uint32_t screen_width = 60;
-constexpr uint32_t screen_height = 60;
+constexpr uint32_t screen_width = 75;
+constexpr uint32_t screen_height = 75;
 
 constexpr float theta_spacing = 0.07;
 constexpr float phi_spacing = 0.02;
@@ -92,12 +92,12 @@ void render_frame(float A, float B)
                 if (ooz > zbuffer[xp][yp])
                 {
                     zbuffer[xp][yp] = ooz;
-                    int luminance_index = L * 8;
+                    int luminance_index = L * 4; // 5
                     // printf("luminance_index: %i, xp: %i, yp: %i \n", luminance_index, xp, yp);
                     // luminance_index is now in the range 0..11 (8*sqrt(2) = 11.3)
                     // now we lookup the character corresponding to the
                     // luminance and plot it in our output:
-                    output[xp][yp] = ".,-~:;=!*#$@"[luminance_index];
+                    output[xp][yp] = ".-=?%@"[luminance_index];
                 }
             }
         }
