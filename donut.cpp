@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <array>
 #include <unistd.h>
+#include <cmath>
 
 constexpr uint32_t screen_width = 75;
 constexpr uint32_t screen_height = 75;
@@ -12,14 +13,15 @@ constexpr float phi_spacing = 0.02;
 
 constexpr float R1 = 3;
 constexpr float R2 = 5;
-constexpr float K2 = 25;
+constexpr float K2 = 20;
+constexpr float size_scaler = 0.6;
 // Calculate K1 based on screen size: the maximum x-distance occurs
 // roughly at the edge of the torus, which is at x=R1+R2, z=0.  we
 // want that to be displaced 3/8ths of the width of the screen, which
 // is 3/4th of the way from the center to the side of the screen.
 // screen_width*3/8 = K1*(R1+R2)/(K2+0)
 // screen_width*K2*3/(8*(R1+R2)) = K1
-constexpr float K1 = screen_width * K2 * 3 / (8 * (R1 + R2));
+constexpr float K1 = screen_width * K2 * 3 / (8 * (R1 + R2)) * size_scaler;
 
 template <typename T>
 constexpr auto make_2d_array(T init)
@@ -43,10 +45,12 @@ static auto output_init_copy{output};
 static auto zbuffer{make_2d_array<float>(0.0)};
 static auto zbuffer_init_copy{zbuffer};
 
-float Lx = 1, Ly = 0.5, Lz = -1;
+// Const because of viewer direction. Z buffer removes coordinates behind what's closest to the viewer.
+constexpr float Lz = -1;
 
-void render_frame(float A, float B)
+void render_frame(float A, float B, float Lx, float Ly)
 {
+
     output = output_init_copy;
     zbuffer = zbuffer_init_copy;
     // precompute sines and cosines of A and B
@@ -82,9 +86,9 @@ void render_frame(float A, float B)
             int xp = (int)(screen_width / 2.0F + K1 * ooz * x);
             int yp = (int)(screen_height / 2.0F - K1 * ooz * y);
 
-            // calculate luminance.  ugly, but correct.
-            // float L = cosphi * costheta * sinB - cosA * costheta * sinphi -
-            //           sinA * sintheta + cosB * (cosA * sintheta - costheta * sinA * sinphi);
+            int light_source_x = (int)(((float)screen_width / 2.0F) + Lx * ((float)screen_width / 2.01F));
+            int light_source_y = (int)(((float)screen_height / 2.0F) - Ly * ((float)screen_height / 2.01F));
+
             float L = Lz * (sinA * sintheta + cosA * costheta * sinphi) + Ly * (costheta * cosphi * sinB + cosB * (cosA * sintheta - costheta * sinA * sinphi)) + Lx * (cosB * costheta * cosphi - sinB * (cosA * sintheta - costheta * sinA * sinphi));
             // L ranges from -sqrt(2) to +sqrt(2).  If it's < 0, the surface
             // is pointing away from us, so we won't bother trying to plot it.
@@ -101,6 +105,8 @@ void render_frame(float A, float B)
                     // now we lookup the character corresponding to the
                     // luminance and plot it in our output:
                     output[xp][yp] = ".-=?%@"[luminance_index];
+
+                    output[light_source_x][light_source_y] = 'X';
                 }
             }
         }
@@ -127,20 +133,18 @@ int main(int argc, char const *argv[])
     float sleep_dur = duration_s / steps;
     float inc = M_PI / steps;
 
-    float i{0}, j{0};
+    float i{0}, j{0}, Ly{0}, Lx{0}, i_ls{0};
     printf("\033c");
     while (true)
     {
-        i += inc;
-        j += inc * 1.35;
-        Ly = sin(i);
-        Lx = cos(j);
-        // TODO Plot the light source
-        // render_frame(1, 1);
-        render_frame(i, j);
+        i_ls += inc * 0.95;
+        i += inc * 1.55;
+        j += inc * 0.55;
+        Lx = cos(i_ls);
+        Ly = sin(i_ls);
+        render_frame(i, j, Lx, Ly);
         sleep(sleep_dur);
     }
-    printf("\033c");
 
     return 0;
 }
