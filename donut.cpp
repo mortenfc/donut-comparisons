@@ -100,7 +100,7 @@ void render_frame(float A, float B, float Lx, float Ly)
                 if (ooz > zbuffer[xp][yp])
                 {
                     zbuffer[xp][yp] = ooz;
-                    int luminance_index = L * 2; // max index is 5
+                    int luminance_index = L * 2.2; // max index is 5
                     // luminance_index is now in the range 0..11 (8*sqrt(2) = 11.3)
                     // now we lookup the character corresponding to the
                     // luminance and plot it in our output:
