@@ -11,7 +11,7 @@ constexpr float theta_spacing = 0.07;
 constexpr float phi_spacing = 0.02;
 
 constexpr float R1 = 3;
-constexpr float R2 = 6;
+constexpr float R2 = 5;
 constexpr float K2 = 25;
 // Calculate K1 based on screen size: the maximum x-distance occurs
 // roughly at the edge of the torus, which is at x=R1+R2, z=0.  we
@@ -42,6 +42,8 @@ static auto output_init_copy{output};
 
 static auto zbuffer{make_2d_array<float>(0.0)};
 static auto zbuffer_init_copy{zbuffer};
+
+float Lx = 1, Ly = 0.5, Lz = -1;
 
 void render_frame(float A, float B)
 {
@@ -81,19 +83,20 @@ void render_frame(float A, float B)
             int yp = (int)(screen_height / 2.0F - K1 * ooz * y);
 
             // calculate luminance.  ugly, but correct.
-            float L = cosphi * costheta * sinB - cosA * costheta * sinphi -
-                      sinA * sintheta + cosB * (cosA * sintheta - costheta * sinA * sinphi);
+            // float L = cosphi * costheta * sinB - cosA * costheta * sinphi -
+            //           sinA * sintheta + cosB * (cosA * sintheta - costheta * sinA * sinphi);
+            float L = Lz * (sinA * sintheta + cosA * costheta * sinphi) + Ly * (costheta * cosphi * sinB + cosB * (cosA * sintheta - costheta * sinA * sinphi)) + Lx * (cosB * costheta * cosphi - sinB * (cosA * sintheta - costheta * sinA * sinphi));
             // L ranges from -sqrt(2) to +sqrt(2).  If it's < 0, the surface
             // is pointing away from us, so we won't bother trying to plot it.
-            if (L > 0)
+            if (L > -1)
             {
+                L++;
                 // test against the z-buffer.  larger 1/z means the pixel is
                 // closer to the viewer than what's already plotted.
                 if (ooz > zbuffer[xp][yp])
                 {
                     zbuffer[xp][yp] = ooz;
-                    int luminance_index = L * 4; // 5
-                    // printf("luminance_index: %i, xp: %i, yp: %i \n", luminance_index, xp, yp);
+                    int luminance_index = L * 2; // max index is 5
                     // luminance_index is now in the range 0..11 (8*sqrt(2) = 11.3)
                     // now we lookup the character corresponding to the
                     // luminance and plot it in our output:
@@ -129,7 +132,11 @@ int main(int argc, char const *argv[])
     while (true)
     {
         i += inc;
-        j += inc * 1.3;
+        j += inc * 1.35;
+        Ly = sin(i);
+        Lx = cos(j);
+        // TODO Plot the light source
+        // render_frame(1, 1);
         render_frame(i, j);
         sleep(sleep_dur);
     }
