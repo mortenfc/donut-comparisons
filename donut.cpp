@@ -143,7 +143,7 @@ int main(int argc, char const *argv[])
         Lx = cos(i_ls);
         Ly = sin(i_ls);
         render_frame(i, j, Lx, Ly);
-        sleep(sleep_dur);
+        usleep(int(sleep_dur) * 1000000);
     }
 
     return 0;
