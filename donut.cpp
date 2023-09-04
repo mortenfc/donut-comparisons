@@ -15,7 +15,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 // TODO Debug why big values of these causes black dots to appear.
-//* Theory: Does not calculate the same xyz for bigger resolutions / larger angle spacings, 
+//* Theory: Does not calculate the same xyz for bigger resolutions / larger angle spacings,
 //* so points between points will be calculated as rotating, meaning ooz can print a point behind a point.
 constexpr uint32_t screen_width = 50;
 constexpr uint32_t screen_height = 50;
@@ -131,7 +131,7 @@ void glDisplayPoints(
             {
                 glColor3f(1, 1, 0); // Yellow
                 constexpr static int num_corners = 20;
-                constexpr static float radius = 0.01;
+                constexpr static float radius = 0.002 * (5 + opengl_resolution_mutliplier);
                 glEnd();
                 drawPolygon(x, y, radius, num_corners);
                 glBegin(GL_POINTS);
