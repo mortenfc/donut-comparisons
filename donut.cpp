@@ -15,18 +15,18 @@
 #include <glm/gtc/type_ptr.hpp>
 
 // TODO Debug why big values of these causes black dots to appear.
-//* Theory: Does not calculate the same xyz for bigger resolutions / smaller angle spacings, 
+//* Theory: Does not calculate the same xyz for bigger resolutions / larger angle spacings, 
 //* so points between points will be calculated as rotating, meaning ooz can print a point behind a point.
-constexpr uint32_t screen_width = 500;
-constexpr uint32_t screen_height = 500;
-constexpr uint8_t opengl_resolution_mutliplier = 1;
+constexpr uint32_t screen_width = 50;
+constexpr uint32_t screen_height = 50;
+constexpr uint8_t opengl_resolution_mutliplier = 7;
 
 constexpr float theta_spacing = 0.07;
 constexpr float phi_spacing = 0.02;
 
 constexpr float R1 = 3;
 constexpr float R2 = 5;
-constexpr float K2 = 20; // Seems to be a good value to prevent negative Z's. Not derived at all, and won't work for all R1 and R2
+constexpr float K2 = 20;
 constexpr float size_scaler = 1;
 // Calculate K1 based on screen size: the maximum x-distance occurs
 // roughly at the edge of the torus, which is at x=R1+R2, z=0.  we
@@ -37,7 +37,7 @@ constexpr float size_scaler = 1;
 constexpr float K1 = screen_width * K2 * 3 / (8 * (R1 + R2)) * size_scaler;
 
 // Const because of viewer direction. Z buffer removes coordinates behind what's closest to the viewer.
-constexpr float Lz = -1.2;
+constexpr float Lz = -0.75;
 
 static GLFWwindow *g_window;
 
