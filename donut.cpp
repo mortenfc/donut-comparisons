@@ -21,7 +21,8 @@
 //* When projecting the 3d torus to 2d as XY, the rotational points won't overlap if it does not compute a point frequently enough,
 //* leading to ooz can select a point on another surface between points in the surface facing the viewer.
 
-// WARNING: Changing these rendering constants can heavily affect compilation duration
+// WARNING: Changing these rendering constants can heavily affect compilation duration and make it operations overflow during compulation, especially if 
+// DonutStorage is constexpr. -fconstexpr-ops-limit=173554432
 
 // One-frame donut rendering
 constexpr uint32_t screen_width = 500;
@@ -31,22 +32,22 @@ constexpr float theta_spacing = 0.07 * (50.0 / screen_width);
 constexpr float phi_spacing = 0.02 * (50.0 / screen_width);
 
 // Rendering multiple frames (rotating the donut)
-constexpr int kA_ls_den = 4;
-constexpr int kA_den = 2;
-constexpr int kB_den = 6;
-constexpr int lcm(int a, int b, int c) {
-  return std::lcm(std::lcm(a, b), c);
-}
-constexpr int rev_count = lcm(kA_ls_den, kA_den, kB_den);  // 12
-constexpr float k(int denominator) {
-  return 2.0f / denominator;
-}
-constexpr float kA_ls = k(kA_ls_den);  // 0.5;
-constexpr float kA = k(kA_den);        // 1;
-constexpr float kB = k(kB_den);        // 0.33333;
-constexpr int its = 100 * (rev_count / 2);
+constexpr float frame_frequency = 15.0;
+constexpr int rev_count = 4;
+constexpr float kA_ls = 0.5;
+constexpr float kA = 1.0;
+constexpr float kB = 1.5;
+constexpr int its = 100;
 constexpr float radians_one_cycle = float(rev_count) * M_PI;
 constexpr float inc = radians_one_cycle / float(its);
+
+using Ascii = std::array<std::array<char, screen_height>, screen_width>;
+using Lums = std::array<std::array<float, screen_height>, screen_width>;
+using DonutFrame = std::pair<Ascii, Lums>;
+using DonutStorage = std::array<DonutFrame, its>;
+constexpr DonutStorage render_a_rotating_donut();
+//!* NOTE Remove constexpr here to compile larger resolutions. But it will be slow to start instead.
+/*constexpr*/ static DonutStorage asciis_and_lums{render_a_rotating_donut()};
 
 // Torus dimensions
 constexpr float R1 = 3;
@@ -114,8 +115,6 @@ void drawPolygon(float x, float y, float radius, int num_corners) {
   glEnd();
 }
 
-using Ascii = std::array<std::array<char, screen_height>, screen_width>;
-using Lums = std::array<std::array<float, screen_height>, screen_width>;
 void glDisplayPoints(Lums const& points) {
   // https://eng.libretexts.org/Bookshelves/Computer_Science/Applied_Programming/Book%3A_Introduction_to_Computer_Graphics_(Eck)/03%3A_OpenGL_1.1-_Geometry/3.01%3A_Shapes_and_Colors_in_OpenGL_1.1
 
@@ -163,9 +162,7 @@ constexpr auto zbuffer_init_copy{make_2d_array<float>(0.0)};
 
 constexpr auto lum_init_copy{make_2d_array<float>(0.0)};
 
-using DonutFrame = std::pair<Ascii, Lums>;
-
-DonutFrame render_frame(float A, float B, float Lx, float Ly) {
+constexpr DonutFrame render_frame(float A, float B, float Lx, float Ly) {
   // TODO This math can be heavily optimized
   auto ascii = ascii_init_copy;
   auto zbuffer = zbuffer_init_copy;
@@ -231,8 +228,7 @@ DonutFrame render_frame(float A, float B, float Lx, float Ly) {
   return std::make_pair(ascii, lum);
 }
 
-using DonutStorage = std::array<DonutFrame, its>;
-constexpr DonutStorage render_donut_compile_time() {
+constexpr DonutStorage render_a_rotating_donut() {
   DonutStorage out;
 
   float A{0}, A_ls{0}, B{0};
@@ -249,8 +245,6 @@ constexpr DonutStorage render_donut_compile_time() {
 
   return out;
 }
-
-static DonutStorage asciis_and_lums{render_donut_compile_time()};
 
 void asciiDisplayPoints(Ascii const& ascii) {
   // now, dump ascii[] to the screen.
@@ -319,22 +313,21 @@ Args parse_arguments(int argc, char* const argv[]) {
 }
 
 int main(int argc, char* const argv[]) {
-  std::cout << "rev_count: " << rev_count << ", kA_ls: " << kA_ls << ", kA: " << kA << ", kB: " << kB
-            << ", its: " << its << std::endl;
   Args args = parse_arguments(argc, argv);
+  DonutFrame runtime_donut_frame;
   std::function<bool(int, DonutFrame const&)> display_func;
   std::function<DonutFrame const&(float, int)> compute_donut;
 
   switch (args.processing_mode) {
     case Args::ProcessingMode::run_time:
-      compute_donut = [](float inc_sum, int i) -> DonutFrame const& {
+      compute_donut = [&runtime_donut_frame](float inc_sum, int i) -> DonutFrame const& {
         float A_ls = inc_sum * kA_ls;
         float A = inc_sum * kA;
         float B = inc_sum * kB;
         float Lx = cos(A_ls);
         float Ly = sin(A_ls);
-        asciis_and_lums[i] = render_frame(A, B, Lx, Ly);
-        return asciis_and_lums[i];
+        runtime_donut_frame = render_frame(A, B, Lx, Ly);
+        return runtime_donut_frame;
       };
       break;
     case Args::ProcessingMode::compile_time:
@@ -372,7 +365,7 @@ int main(int argc, char* const argv[]) {
         goto terminate;
       }
 
-      sleep_for_frequency_Hz(20, start_time);
+      sleep_for_frequency_Hz(frame_frequency, start_time);
     }
   }
 

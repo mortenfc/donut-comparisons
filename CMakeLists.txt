@@ -24,7 +24,7 @@ add_executable(
     ${SOURCE_DIR}
 )
 
-target_compile_options(donut PRIVATE -fconstexpr-ops-limit=133554432)
+target_compile_options(donut PRIVATE -fconstexpr-ops-limit=173554432)
 
 ExternalProject_Add(glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
