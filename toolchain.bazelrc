@@ -1,1 +1,0 @@
-build --action_env=BAZEL_CXXOPTS="-std=c++14" --compilation_mode=dbg -s

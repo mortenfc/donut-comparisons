@@ -1,8 +1,7 @@
 project(donut)
 
 cmake_minimum_required(VERSION 3.22)
-set(CMAKE_CXX_STANDARD 14)
-
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_BUILD_TYPE Debug)
 
 include(ExternalProject)
@@ -12,6 +11,7 @@ ExternalProject_Add(glm
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND ""
+    CMAKE_ARGS -DCMAKE_CXX_FLAGS=-w -DCMAKE_C_FLAGS=-w
 )
 
 ExternalProject_Get_Property(glm SOURCE_DIR)
@@ -23,6 +23,8 @@ add_executable(
     donut.cpp
     ${SOURCE_DIR}
 )
+
+target_compile_options(donut PRIVATE -fconstexpr-ops-limit=133554432)
 
 ExternalProject_Add(glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
