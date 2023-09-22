@@ -183,6 +183,9 @@ constexpr DonutFrame render_frame(RenderParams const& p) {
   float cosB = cos(p.B), sinB = sin(p.B);
 
   // theta goes around the cross-sectional circle of a torus
+
+  // Could create a set of all these data and split the computation of them into X threads the computer has.
+  // The results should be concatenated in the end to calculate ascii and lum using ooz
   for (float theta = 0; theta < 2.0F * M_PI; theta += theta_spacing) {
     // precompute sines and cosines of theta
     float costheta = cos(theta), sintheta = sin(theta);
@@ -396,7 +399,7 @@ void run_time_multi(ThreadData& td) {
   while (!td.finished) {
     // Render frame is so slow it should not wait
     index = (index + 1) % 2;                               // Move to the next index in the ring buffer
-    td.data_out[index] = render_frame(td.data_in[index]);  // 0 1 0 1
+    td.data_out[index] = render_frame(td.data_in[index]);  // 1 0 1 0
     td.cv_main.notify_one();                               // Notify renderer about new data
   }
 }
@@ -436,13 +439,13 @@ int main(int argc, char* const argv[]) {
 
         {
           std::unique_lock<std::mutex> temp_lock{td.mtx};
-          td.data_in[index] = RenderParams{A, B, Lx, Ly};  // 0, 1, 0, 1
+          td.data_in[index] = RenderParams{A, B, Lx, Ly};  // 0 1 0 1
           if (i == 0) {
             td.cv_worker.notify_one();  // Sync first cycle
           }
           td.cv_main.wait(temp_lock);  // Sync to the slower thread since there is bidirectional data dependency
         }
-        runtime_donut_frame = td.data_out[index];  // 0, 1, 0, 1
+        runtime_donut_frame = td.data_out[index];  // 0 1 0 1
 
         return runtime_donut_frame;
       };
