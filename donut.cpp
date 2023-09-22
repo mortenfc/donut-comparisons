@@ -491,7 +491,7 @@ terminate:
   if (args.processing_mode == Args::ProcessingMode::run_time_multi) {
     td.finished = true;
     td.cv_main.notify_one();
-    // td.cv_main.notify_one();
+    td.cv_worker.notify_one();
     worker.join();
   }
   return 0;
