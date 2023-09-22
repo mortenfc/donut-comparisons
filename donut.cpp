@@ -5,10 +5,14 @@
 #include <array>
 #include <iostream>
 #include <numeric>
+#include <random>
 #include <utility>
 
 #include <chrono>
+#include <cmath>
+#include <condition_variable>
 #include <functional>
+#include <mutex>
 #include <thread>
 
 #include <GL/gl.h>
@@ -21,7 +25,7 @@
 //* When projecting the 3d torus to 2d as XY, the rotational points won't overlap if it does not compute a point frequently enough,
 //* leading to ooz can select a point on another surface between points in the surface facing the viewer.
 
-// WARNING: Changing these rendering constants can heavily affect compilation duration and make it operations overflow during compulation, especially if 
+// WARNING: Changing these rendering constants can heavily affect compilation duration and make it operations overflow during compulation, especially if
 // DonutStorage is constexpr. -fconstexpr-ops-limit=173554432
 
 // One-frame donut rendering
@@ -162,14 +166,21 @@ constexpr auto zbuffer_init_copy{make_2d_array<float>(0.0)};
 
 constexpr auto lum_init_copy{make_2d_array<float>(0.0)};
 
-constexpr DonutFrame render_frame(float A, float B, float Lx, float Ly) {
+struct RenderParams {
+  float A;
+  float B;
+  float Lx;
+  float Ly;
+};
+
+constexpr DonutFrame render_frame(RenderParams const& p) {
   // TODO This math can be heavily optimized
   auto ascii = ascii_init_copy;
   auto zbuffer = zbuffer_init_copy;
   auto lum = lum_init_copy;
   // precompute sines and cosines of A and B
-  float cosA = cos(A), sinA = sin(A);
-  float cosB = cos(B), sinB = sin(B);
+  float cosA = cos(p.A), sinA = sin(p.A);
+  float cosB = cos(p.B), sinB = sin(p.B);
 
   // theta goes around the cross-sectional circle of a torus
   for (float theta = 0; theta < 2.0F * M_PI; theta += theta_spacing) {
@@ -198,12 +209,12 @@ constexpr DonutFrame render_frame(float A, float B, float Lx, float Ly) {
       int xp = (int)(screen_width / 2.0F + K1 * ooz * x);
       int yp = (int)(screen_height / 2.0F - K1 * ooz * y);
 
-      int light_source_x = (int)(((float)screen_width / 2.0F) + Lx * ((float)screen_width / 2.01F));
-      int light_source_y = (int)(((float)screen_height / 2.0F) - Ly * ((float)screen_height / 2.01F));
+      int light_source_x = (int)(((float)screen_width / 2.0F) + p.Lx * ((float)screen_width / 2.01F));
+      int light_source_y = (int)(((float)screen_height / 2.0F) - p.Ly * ((float)screen_height / 2.01F));
 
       const float L = Lz * (sinA * sintheta + cosA * costheta * sinphi) +
-                      Ly * (costheta * cosphi * sinB + cosB * (cosA * sintheta - costheta * sinA * sinphi)) +
-                      Lx * (cosB * costheta * cosphi - sinB * (cosA * sintheta - costheta * sinA * sinphi));
+                      p.Ly * (costheta * cosphi * sinB + cosB * (cosA * sintheta - costheta * sinA * sinphi)) +
+                      p.Lx * (cosB * costheta * cosphi - sinB * (cosA * sintheta - costheta * sinA * sinphi));
       // L ranges from -sqrt(2) to +sqrt(2).  If it's < 0, the surface
       // is pointing away from us, so we won't bother trying to plot it.
       if (L > -1) {
@@ -239,7 +250,7 @@ constexpr DonutStorage render_a_rotating_donut() {
     B += inc * kB;
     float Lx = cos(A_ls);
     float Ly = sin(A_ls);
-    out[i] = render_frame(A, B, Lx, Ly);
+    out[i] = render_frame(RenderParams{A, B, Lx, Ly});
     i++;
   }
 
@@ -259,7 +270,40 @@ void asciiDisplayPoints(Ascii const& ascii) {
   }
 }
 
+template <typename Type>
+class RunningStatistics {
+ public:
+  RunningStatistics(Type initial_val) : count{1}, mean{initial_val}, min{mean}, max{mean}, variance{0}, std_dev{0} {}
+
+  void update(Type new_val) {
+    const int count_m1 = count;
+    count++;
+    min = std::min<Type>(min, new_val);
+    max = std::max<Type>(max, new_val);
+    const int old_mean_diff = (new_val - mean);
+    if (count_m1 > 0) {
+      variance = (count_m1 / count) * variance + (1.0F / count_m1) * old_mean_diff * old_mean_diff;
+      std_dev = sqrt<Type>(variance);
+    }
+    mean = (mean * count_m1 + new_val) / count;
+  }
+
+  void print(std::string name = "RunningStatistics") {
+    std::cout << std::endl << name << std::endl;
+    std::cout << "Mean: " << mean << "\nMin: " << min << "\nMax: " << max << "\nStdDev: " << std_dev << std::endl;
+  }
+
+ private:
+  Type count;
+  Type mean;
+  Type min;
+  Type max;
+  Type variance;
+  Type std_dev;
+};
+
 void sleep_for_frequency_Hz(float frequency, std::chrono::time_point<std::chrono::high_resolution_clock> start_time) {
+
   auto target_cycle_time = std::chrono::duration<double>(1.0 / frequency);
   auto processing_time = std::chrono::high_resolution_clock::now() - start_time;
   auto sleep_time_micros = std::chrono::duration_cast<std::chrono::microseconds>(target_cycle_time - processing_time);
@@ -268,6 +312,11 @@ void sleep_for_frequency_Hz(float frequency, std::chrono::time_point<std::chrono
             << std::chrono::duration_cast<std::chrono::microseconds>(processing_time).count()
             << "\nSleep time in micros: "
             << std::chrono::duration_cast<std::chrono::microseconds>(sleep_time_micros).count() << std::endl;
+
+  static RunningStatistics stats{std::chrono::duration_cast<std::chrono::microseconds>(processing_time).count()};
+  stats.update(std::chrono::duration_cast<std::chrono::microseconds>(processing_time).count());
+  stats.print("#####  Statistics for processing time [ms]  #####");
+
   // Sleep for the computed time
   if (sleep_time_micros.count() > 0) {
     std::this_thread::sleep_for(sleep_time_micros);
@@ -276,35 +325,50 @@ void sleep_for_frequency_Hz(float frequency, std::chrono::time_point<std::chrono
 }
 
 struct Args {
-  enum class ProcessingMode { compile_time, run_time };
-  ProcessingMode processing_mode = ProcessingMode::compile_time;
+  enum class ProcessingMode { startup_time, run_time, run_time_multi };
+  ProcessingMode processing_mode = ProcessingMode::startup_time;
 
   enum class DisplayMode { ascii, opengl };
   DisplayMode display_mode = DisplayMode::opengl;
 };
+
+void print_options() {
+  std::cout << "Options:\n"
+            << "--display=ascii: Set display mode to ascii\n"
+            << "--display=opengl: Set display mode to opengl (default)\n"
+            << "--compute=run_time: Set compute mode to run time\n"
+            << "--compute=startup_time: Set compute mode to compile time (default)\n"
+            << "--compute=run_time_multi: Set compute mode to compile time\n";
+}
 
 Args parse_arguments(int argc, char* const argv[]) {
   Args args;
   int opt;
   for (int i = 1; i < argc; ++i) {
     if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-      std::cout << "Options:\n"
-                << "--display=ascii: Set display mode to ascii\n"
-                << "--display=opengl: Set display mode to opengl (default)\n"
-                << "--compute=runtime: Set compute mode to run time\n"
-                << "--compute=compiletime: Set compute mode to compile time (default)\n";
+      print_options();
       exit(0);
     } else if (strncmp(argv[i], "--display=", 10) == 0) {
       if (strcmp(argv[i] + 10, "ascii") == 0) {
         args.display_mode = Args::DisplayMode::ascii;
       } else if (strcmp(argv[i] + 10, "opengl") == 0) {
         args.display_mode = Args::DisplayMode::opengl;
+      } else {
+        std::cout << "No such option \"" << argv[i] + 10 << "\"\n";
+        print_options();
+        exit(1);
       }
     } else if (strncmp(argv[i], "--compute=", 10) == 0) {
-      if (strcmp(argv[i] + 10, "runtime") == 0) {
+      if (strcmp(argv[i] + 10, "run_time") == 0) {
         args.processing_mode = Args::ProcessingMode::run_time;
-      } else if (strcmp(argv[i] + 10, "compiletime") == 0) {
-        args.processing_mode = Args::ProcessingMode::compile_time;
+      } else if (strcmp(argv[i] + 10, "startup_time") == 0) {
+        args.processing_mode = Args::ProcessingMode::startup_time;
+      } else if (strcmp(argv[i] + 10, "run_time_multi") == 0) {
+        args.processing_mode = Args::ProcessingMode::run_time_multi;
+      } else {
+        std::cout << "No such option \"" << argv[i] + 10 << "\"\n";
+        print_options();
+        exit(1);
       }
     }
   }
@@ -312,8 +376,37 @@ Args parse_arguments(int argc, char* const argv[]) {
   return args;
 }
 
+struct ThreadData {
+  std::condition_variable cv_main;
+  std::condition_variable cv_worker;
+  std::mutex mtx;
+  std::atomic<bool> finished{false};
+  RenderParams data_in[2];
+  DonutFrame data_out[2];
+};
+
+void run_time_multi(ThreadData& td) {
+  int index{0};
+
+  {
+    std::unique_lock<std::mutex> temp_lock{td.mtx};
+    td.cv_worker.wait(temp_lock);  // Sync first cycle
+  }
+
+  while (!td.finished) {
+    // Render frame is so slow it should not wait
+    index = (index + 1) % 2;                               // Move to the next index in the ring buffer
+    td.data_out[index] = render_frame(td.data_in[index]);  // 0 1 0 1
+    td.cv_main.notify_one();                               // Notify renderer about new data
+  }
+}
+
 int main(int argc, char* const argv[]) {
   Args args = parse_arguments(argc, argv);
+
+  ThreadData td;
+  std::thread worker;
+
   DonutFrame runtime_donut_frame;
   std::function<bool(int, DonutFrame const&)> display_func;
   std::function<DonutFrame const&(float, int)> compute_donut;
@@ -326,11 +419,35 @@ int main(int argc, char* const argv[]) {
         float B = inc_sum * kB;
         float Lx = cos(A_ls);
         float Ly = sin(A_ls);
-        runtime_donut_frame = render_frame(A, B, Lx, Ly);
+        runtime_donut_frame = render_frame(RenderParams{A, B, Lx, Ly});
         return runtime_donut_frame;
       };
       break;
-    case Args::ProcessingMode::compile_time:
+    case Args::ProcessingMode::run_time_multi:
+      worker = std::thread(run_time_multi, std::ref(td));
+      compute_donut = [&runtime_donut_frame, &td, &worker](float inc_sum, int i) -> DonutFrame const& {
+        int index = i % 2;
+
+        float A_ls = inc_sum * kA_ls;
+        float A = inc_sum * kA;
+        float B = inc_sum * kB;
+        float Lx = cos(A_ls);
+        float Ly = sin(A_ls);
+
+        {
+          std::unique_lock<std::mutex> temp_lock{td.mtx};
+          td.data_in[index] = RenderParams{A, B, Lx, Ly};  // 0, 1, 0, 1
+          if (i == 0) {
+            td.cv_worker.notify_one();  // Sync first cycle
+          }
+          td.cv_main.wait(temp_lock);  // Sync to the slower thread since there is bidirectional data dependency
+        }
+        runtime_donut_frame = td.data_out[index];  // 0, 1, 0, 1
+
+        return runtime_donut_frame;
+      };
+      break;
+    case Args::ProcessingMode::startup_time:
       compute_donut = [](float, int i) -> DonutFrame const& {
         return asciis_and_lums[i];
       };
@@ -371,5 +488,11 @@ int main(int argc, char* const argv[]) {
 
 terminate:
   glfwTerminate();
+  if (args.processing_mode == Args::ProcessingMode::run_time_multi) {
+    td.finished = true;
+    td.cv_main.notify_one();
+    // td.cv_main.notify_one();
+    worker.join();
+  }
   return 0;
 }
