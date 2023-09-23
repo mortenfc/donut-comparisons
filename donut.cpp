@@ -12,6 +12,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <functional>
+#include <future>
 #include <mutex>
 #include <thread>
 
@@ -49,7 +50,7 @@ using Ascii = std::array<std::array<char, screen_height>, screen_width>;
 using Lums = std::array<std::array<float, screen_height>, screen_width>;
 using DonutFrame = std::pair<Ascii, Lums>;
 using DonutStorage = std::array<DonutFrame, its>;
-constexpr DonutStorage render_a_rotating_donut();
+/*constexpr*/ DonutStorage render_a_rotating_donut();
 //!* NOTE Remove constexpr here to compile larger resolutions. But it will be slow to start instead.
 /*constexpr*/ static DonutStorage asciis_and_lums{render_a_rotating_donut()};
 
@@ -173,76 +174,126 @@ struct RenderParams {
   float Ly;
 };
 
-constexpr DonutFrame render_frame(RenderParams const& p) {
-  // TODO This math can be heavily optimized
+struct RenderCoordinates {
+  float L;
+  float ooz;
+  int xp;
+  int yp;
+  int ls_x;
+  int ls_y;
+};
+
+// TODO make this constexpr.. But all vectors should probably be changed to array of preknown size steps_to_thread_end - begin_thread_at_step
+/*constexpr*/ std::vector<RenderCoordinates> compute_render_coordinates(RenderParams const& p, int thread_idx = 0,
+                                                                        int thread_count = 1) {
+  const float cosA = cos(p.A), sinA = sin(p.A);
+  const float cosB = cos(p.B), sinB = sin(p.B);
+  const float theta_range = 2.0F * M_PI;
+  const float phi_range = theta_range;
+
+  const int num_theta_steps = static_cast<int>(std::ceil(theta_range / theta_spacing));
+  const int num_phi_steps = static_cast<int>(std::ceil(phi_range / phi_spacing));
+  const int total_steps = num_theta_steps * num_phi_steps;
+
+  int steps_per_thread = total_steps / thread_count;
+  int steps_to_thread_end = (thread_idx + 1) * steps_per_thread;
+  int begin_thread_at_step = thread_idx * steps_per_thread;
+
+  std::vector<RenderCoordinates> results(steps_to_thread_end - begin_thread_at_step);
+
+  // Flattened nested loop
+  for (int i = begin_thread_at_step; i < steps_to_thread_end; ++i) {
+    int theta_i = i / num_phi_steps;  // 1 1 1 2 2 2 3 3 3
+    int phi_i = i % num_phi_steps;    // 1 2 3 1 2 3 1 2 3
+
+    float theta = theta_i * theta_spacing;
+    float phi = phi_i * phi_spacing;
+
+    // TODO This math can be heavily optimized
+    float costheta = cos(theta), sintheta = sin(theta);
+    float cosphi = cos(phi), sinphi = sin(phi);
+
+    // the x,y coordinate of the circle, before revolving (factored
+    // out of the above equations)
+    float circlex = R2 + R1 * costheta;
+    float circley = R1 * sintheta;
+
+    // final 3D (x,y,z) coordinate after rotations, directly from
+    // our math above
+    float x = circlex * (cosB * cosphi + sinA * sinB * sinphi) - circley * cosA * sinB;
+    float y = circlex * (sinB * cosphi - sinA * cosB * sinphi) + circley * cosA * cosB;
+    float z = K2 + cosA * circlex * sinphi + circley * sinA;
+    float ooz = 1.0F / z;  // "one over z"
+
+    // x and y projection.  note that y is negated here, because y
+    // goes up in 3D space but down on 2D displays.
+    const int xp = (int)(screen_width / 2.0F + K1 * ooz * x);
+    const int yp = (int)(screen_height / 2.0F - K1 * ooz * y);
+
+    const int ls_x = (int)(((float)screen_width / 2.0F) + p.Lx * ((float)screen_width / 2.01F));
+    const int ls_y = (int)(((float)screen_height / 2.0F) - p.Ly * ((float)screen_height / 2.01F));
+
+    const float L = Lz * (sinA * sintheta + cosA * costheta * sinphi) +
+                    p.Ly * (costheta * cosphi * sinB + cosB * (cosA * sintheta - costheta * sinA * sinphi)) +
+                    p.Lx * (cosB * costheta * cosphi - sinB * (cosA * sintheta - costheta * sinA * sinphi));
+    // L ranges from -sqrt(2) to +sqrt(2).  If it's < 0, the surface
+    // is pointing away from us, so we won't bother trying to plot it.
+
+    results[i - begin_thread_at_step] = {L, ooz, xp, yp, ls_x, ls_y};
+  }
+  return results;
+}
+
+// TODO make this constexpr.. But all vectors should probably be changed to array of preknown size steps_to_thread_end - begin_thread_at_step
+/*constexpr*/ DonutFrame map_out_results(std::vector<RenderCoordinates> const& results) {
   auto ascii = ascii_init_copy;
   auto zbuffer = zbuffer_init_copy;
   auto lum = lum_init_copy;
-  // precompute sines and cosines of A and B
-  float cosA = cos(p.A), sinA = sin(p.A);
-  float cosB = cos(p.B), sinB = sin(p.B);
 
-  // theta goes around the cross-sectional circle of a torus
+  for (const auto& result : results) {
+    // Use result.L, result.ooz, result.xp, result.yp to calculate ascii and lum
+    if (result.L > -1) {
+      // test against the z-buffer. larger 1/z means the pixel is
+      // closer to the viewer than what's already plotted.
+      if (result.ooz > zbuffer[result.xp][result.yp]) {
+        zbuffer[result.xp][result.yp] = result.ooz;
+        int luminance_index = (result.L + 1.F) * 2.2;  // max index is 5
+        // luminance_index is now in the range 0..11 (8*sqrt(2) = 11.3)
+        // now we lookup the character corresponding to the
+        // luminance and plot it in our ascii:
+        ascii[result.xp][result.yp] = ".-=?%@"[luminance_index];
+        ascii[result.ls_x][result.ls_y] = 'X';
 
-  // Could create a set of all these data and split the computation of them into X threads the computer has.
-  // The results should be concatenated in the end to calculate ascii and lum using ooz
-  for (float theta = 0; theta < 2.0F * M_PI; theta += theta_spacing) {
-    // precompute sines and cosines of theta
-    float costheta = cos(theta), sintheta = sin(theta);
-
-    // phi goes around the center of revolution of a torus
-    for (float phi = 0; phi < 2 * M_PI; phi += phi_spacing) {
-      // precompute sines and cosines of phi
-      float cosphi = cos(phi), sinphi = sin(phi);
-
-      // the x,y coordinate of the circle, before revolving (factored
-      // out of the above equations)
-      float circlex = R2 + R1 * costheta;
-      float circley = R1 * sintheta;
-
-      // final 3D (x,y,z) coordinate after rotations, directly from
-      // our math above
-      float x = circlex * (cosB * cosphi + sinA * sinB * sinphi) - circley * cosA * sinB;
-      float y = circlex * (sinB * cosphi - sinA * cosB * sinphi) + circley * cosA * cosB;
-      float z = K2 + cosA * circlex * sinphi + circley * sinA;
-      float ooz = 1.0F / z;  // "one over z"
-
-      // x and y projection.  note that y is negated here, because y
-      // goes up in 3D space but down on 2D displays.
-      int xp = (int)(screen_width / 2.0F + K1 * ooz * x);
-      int yp = (int)(screen_height / 2.0F - K1 * ooz * y);
-
-      int light_source_x = (int)(((float)screen_width / 2.0F) + p.Lx * ((float)screen_width / 2.01F));
-      int light_source_y = (int)(((float)screen_height / 2.0F) - p.Ly * ((float)screen_height / 2.01F));
-
-      const float L = Lz * (sinA * sintheta + cosA * costheta * sinphi) +
-                      p.Ly * (costheta * cosphi * sinB + cosB * (cosA * sintheta - costheta * sinA * sinphi)) +
-                      p.Lx * (cosB * costheta * cosphi - sinB * (cosA * sintheta - costheta * sinA * sinphi));
-      // L ranges from -sqrt(2) to +sqrt(2).  If it's < 0, the surface
-      // is pointing away from us, so we won't bother trying to plot it.
-      if (L > -1) {
-        // test against the z-buffer. larger 1/z means the pixel is
-        // closer to the viewer than what's already plotted.
-        if (ooz > zbuffer[xp][yp]) {
-          zbuffer[xp][yp] = ooz;
-          int luminance_index = (L + 1.F) * 2.2;  // max index is 5
-          // luminance_index is now in the range 0..11 (8*sqrt(2) = 11.3)
-          // now we lookup the character corresponding to the
-          // luminance and plot it in our ascii:
-          ascii[xp][yp] = ".-=?%@"[luminance_index];
-          ascii[light_source_x][light_source_y] = 'X';
-
-          lum[xp][yp] = L;
-          lum[light_source_x][light_source_y] = -10;
-        }
+        lum[result.xp][result.yp] = result.L;
+        lum[result.ls_x][result.ls_y] = -10;
       }
     }
   }
 
   return std::make_pair(ascii, lum);
+};
+
+DonutFrame render_frame(RenderParams const& p, uint8_t thread_count) {
+  std::vector<std::future<std::vector<RenderCoordinates>>> futures;
+  for (uint8_t i = 0; i < thread_count; ++i) {
+    // Launch a new thread
+    futures.push_back(std::async(std::launch::async, compute_render_coordinates, p, i, thread_count));
+  }
+  // Join the results
+  std::vector<RenderCoordinates> results;
+  for (auto& future : futures) {
+    auto result = future.get();
+    results.insert(results.end(), result.begin(), result.end());
+  }
+
+  return map_out_results(results);
 }
 
-constexpr DonutStorage render_a_rotating_donut() {
+/*constexpr*/ DonutFrame render_frame(RenderParams const& p) {
+  return map_out_results(compute_render_coordinates(p));
+}
+
+/*constexpr*/ DonutStorage render_a_rotating_donut() {
   DonutStorage out;
 
   float A{0}, A_ls{0}, B{0};
@@ -398,9 +449,9 @@ void run_time_multi(ThreadData& td) {
 
   while (!td.finished) {
     // Render frame is so slow it should not wait
-    index = (index + 1) % 2;                               // Move to the next index in the ring buffer
-    td.data_out[index] = render_frame(td.data_in[index]);  // 1 0 1 0
-    td.cv_main.notify_one();                               // Notify renderer about new data
+    index = (index + 1) % 2;  // Move to the next index in the ring buffer
+    td.data_out[index] = render_frame(td.data_in[index], std::thread::hardware_concurrency());  // 1 0 1 0
+    td.cv_main.notify_one();  // Notify renderer about new data
   }
 }
 
