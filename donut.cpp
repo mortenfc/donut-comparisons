@@ -294,7 +294,7 @@ constexpr int calc_total_steps() {
 }
 
 template <unsigned int thread_count>
-DonutFrame render_frame(RenderParams const& p) {
+DonutFrame render_frame_multi(RenderParams const& p) {
   constexpr int total_steps{calc_total_steps()};
   constexpr int steps_per_thread = total_steps / thread_count;
   std::vector<std::future<std::array<RenderCoordinates, steps_per_thread>>> futures;
@@ -427,20 +427,6 @@ void sleep_for_frequency_Hz(float frequency,
   std::cout << "\033[2J\033[1;1H";
 }
 
-void thread_sleep_for_frequency_Hz(float frequency,
-                                   std::chrono::time_point<std::chrono::high_resolution_clock> const& start_time) {
-
-  auto target_cycle_time = std::chrono::duration<double>(1.0 / frequency);
-  auto processing_time = std::chrono::high_resolution_clock::now() - start_time;
-  auto sleep_time_micros = std::chrono::duration_cast<std::chrono::microseconds>(target_cycle_time - processing_time);
-
-  // Sleep for the computed time
-  if (sleep_time_micros.count() > 0) {
-    std::this_thread::sleep_for(sleep_time_micros);
-  }
-  std::cout << "\033[2J\033[1;1H";
-}
-
 void print_options() {
   std::cout << "Options:\n"
             << "--display=ascii: Set display mode to ascii\n"
@@ -485,40 +471,8 @@ Args parse_arguments(int argc, char* const argv[]) {
   return args;
 }
 
-struct ThreadData {
-  std::condition_variable cv_main;
-  std::condition_variable cv_worker;
-  std::mutex mtx;
-  std::atomic<bool> finished{false};
-  RenderParams data_in[2];
-  DonutFrame data_out[2];
-};
-
-void run_time_multi(ThreadData& td) {
-  int index{0};
-
-  {
-    std::unique_lock<std::mutex> temp_lock{td.mtx};
-    td.cv_worker.wait(temp_lock);  // Sync first cycle
-  }
-
-  auto start_time{std::chrono::high_resolution_clock::now()};
-  while (!td.finished) {
-    thread_sleep_for_frequency_Hz(frame_frequency, start_time);
-    // Render frame should be so slow it should not wait for main. If both wait for each other, they can't execute at the same time
-    start_time = std::chrono::high_resolution_clock::now();
-
-    index = (index + 1) % 2;  // Move to the next index in the ring buffer
-    td.data_out[index] = render_frame<kUsedThreadCount>(td.data_in[index]);  // 1 0 1 0
-    td.cv_main.notify_one();                                                 // Notify renderer about new data
-  }
-}
-
 int main(int argc, char* const argv[]) {
   Args args = parse_arguments(argc, argv);
-
-  ThreadData td;
-  std::thread worker;
 
   DonutFrame runtime_donut_frame;
   std::function<bool(int, DonutFrame const&)> display_func;
@@ -538,25 +492,14 @@ int main(int argc, char* const argv[]) {
       };
       break;
     case Args::ProcessingMode::run_time_multi:
-      worker = std::thread(run_time_multi, std::ref(td));
-      compute_donut = [&runtime_donut_frame, &td, &worker](float inc_sum, int i) -> DonutFrame const& {
-        int index = i % 2;
-
+      compute_donut = [&runtime_donut_frame](float inc_sum, int i) -> DonutFrame const& {
         float A_ls = inc_sum * kA_ls;
         float A = inc_sum * kA;
         float B = inc_sum * kB;
         float Lx = cos(A_ls);
         float Ly = sin(A_ls);
 
-        {
-          std::unique_lock<std::mutex> temp_lock{td.mtx};
-          td.data_in[index] = RenderParams{A, B, Lx, Ly};  // 0 1 0 1
-          if (i == 0) {
-            td.cv_worker.notify_one();  // Sync first cycle
-          }
-          td.cv_main.wait(temp_lock);  // Sync to the slower thread since there is bidirectional data dependency
-        }
-        runtime_donut_frame = td.data_out[index];  // 0 1 0 1
+        runtime_donut_frame = render_frame_multi<kUsedThreadCount>(RenderParams{A, B, Lx, Ly});
 
         return runtime_donut_frame;
       };
@@ -606,11 +549,5 @@ int main(int argc, char* const argv[]) {
 
 terminate:
   glfwTerminate();
-  if (args.processing_mode == Args::ProcessingMode::run_time_multi) {
-    td.finished = true;
-    td.cv_main.notify_one();
-    td.cv_worker.notify_one();
-    worker.join();
-  }
   return 0;
 }

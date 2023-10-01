@@ -41,7 +41,7 @@ mkdir -p build && cd build; cmake .. && make
 ./donut --help
 
 ### TODO
-- Split rendering into multiple threads
+- Update results with rendering being split into many threads
 - Add raytracing and a mirror to opengl rendering
 - Optimize render_frame to reduce amount of operations used to be able to compute more frames during compilation
 - Improve compile speed by using Bazel
