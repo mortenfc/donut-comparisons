@@ -8,6 +8,7 @@
 #include <random>
 #include <utility>
 
+#include <sys/resource.h>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -26,11 +27,10 @@
 //* When projecting the 3d torus to 2d as XY, the rotational points won't overlap if it does not compute a point frequently enough,
 //* leading to ooz can select a point on another surface between points in the surface facing the viewer.
 
-// WARNING: Changing these rendering constants can heavily affect compilation duration and make it operations overflow during compulation, especially if
-// DonutStorage is constexpr. -fconstexpr-ops-limit=173554432
+// !WARNING!: Increasing these rendering constants can make it memory overflow during compilation / running
 
 // One-frame donut rendering
-constexpr uint32_t screen_width = 500;
+constexpr uint32_t screen_width = 150;
 constexpr uint32_t screen_height = screen_width;
 constexpr uint8_t opengl_resolution_mutliplier = 1080 / screen_height;
 constexpr float theta_spacing = 0.07 * (50.0 / screen_width);
@@ -46,13 +46,9 @@ constexpr int its = 100;
 constexpr float radians_one_cycle = float(rev_count) * M_PI;
 constexpr float inc = radians_one_cycle / float(its);
 
-using Ascii = std::array<std::array<char, screen_height>, screen_width>;
-using Lums = std::array<std::array<float, screen_height>, screen_width>;
-using DonutFrame = std::pair<Ascii, Lums>;
-using DonutStorage = std::array<DonutFrame, its>;
-/*constexpr*/ DonutStorage render_a_rotating_donut();
-//!* NOTE Remove constexpr here to compile larger resolutions. But it will be slow to start instead.
-/*constexpr*/ static DonutStorage asciis_and_lums{render_a_rotating_donut()};
+constexpr int kProcessStackLimit_MB = 512;
+constexpr unsigned int kUsedThreadCount = 12;  // Manually adjust this as it's needed at compile tiome
+// std::thread::hardware_concurrency() is a runtime function only, since the C++ idiom says that binaries should be portable between systems
 
 // Torus dimensions
 constexpr float R1 = 3;
@@ -69,6 +65,11 @@ constexpr float K1 = screen_width * K2 * 3 / (8 * (R1 + R2)) * size_scaler;
 
 // Const because of viewer direction. Z buffer removes coordinates behind what's closest to the viewer.
 constexpr float Lz = -0.75;
+
+using Ascii = std::array<std::array<char, screen_height>, screen_width>;
+using Lums = std::array<std::array<float, screen_height>, screen_width>;
+using DonutFrame = std::pair<Ascii, Lums>;
+using DonutStorage = std::array<DonutFrame, its>;
 
 static GLFWwindow* g_window;
 
@@ -175,32 +176,42 @@ struct RenderParams {
 };
 
 struct RenderCoordinates {
-  float L;
-  float ooz;
-  int xp;
-  int yp;
-  int ls_x;
-  int ls_y;
+  float L{-1};
+  float ooz{0};
+  int xp{0};
+  int yp{0};
+  int ls_x{0};
+  int ls_y{0};
 };
 
+void increase_process_stack_limit(int desired_stack_mb = 64) {
+  // Accounst for all threads spawned by this executable
+  const rlim_t desired_stack_bytes = desired_stack_mb * 1024 * 1024;  // min stack size = 32 MB
+  struct rlimit rl;
+  int result{getrlimit(RLIMIT_STACK, &rl)};
+  if (result == 0) {
+    if (rl.rlim_cur < desired_stack_bytes) {
+      rl.rlim_cur = desired_stack_bytes;
+      result = setrlimit(RLIMIT_STACK, &rl);
+      if (result != 0) {
+        fprintf(stderr, "setrlimit returned result = %d\n", result);
+      }
+    }
+  }
+}
+
 // TODO make this constexpr.. But all vectors should probably be changed to array of preknown size steps_to_thread_end - begin_thread_at_step
-/*constexpr*/ std::vector<RenderCoordinates> compute_render_coordinates(RenderParams const& p, int thread_idx = 0,
-                                                                        int thread_count = 1) {
-  const float cosA = cos(p.A), sinA = sin(p.A);
-  const float cosB = cos(p.B), sinB = sin(p.B);
+template <int size>
+constexpr std::array<RenderCoordinates, size> compute_render_coordinates(RenderParams const& p, int steps_to_thread_end,
+                                                                         int begin_thread_at_step = 0) {
   const float theta_range = 2.0F * M_PI;
   const float phi_range = theta_range;
-
-  const int num_theta_steps = static_cast<int>(std::ceil(theta_range / theta_spacing));
   const int num_phi_steps = static_cast<int>(std::ceil(phi_range / phi_spacing));
-  const int total_steps = num_theta_steps * num_phi_steps;
 
-  int steps_per_thread = total_steps / thread_count;
-  int steps_to_thread_end = (thread_idx + 1) * steps_per_thread;
-  int begin_thread_at_step = thread_idx * steps_per_thread;
+  std::array<RenderCoordinates, size> results;
 
-  std::vector<RenderCoordinates> results(steps_to_thread_end - begin_thread_at_step);
-
+  const float cosA = cos(p.A), sinA = sin(p.A);
+  const float cosB = cos(p.B), sinB = sin(p.B);
   // Flattened nested loop
   for (int i = begin_thread_at_step; i < steps_to_thread_end; ++i) {
     int theta_i = i / num_phi_steps;  // 1 1 1 2 2 2 3 3 3
@@ -244,13 +255,13 @@ struct RenderCoordinates {
   return results;
 }
 
-// TODO make this constexpr.. But all vectors should probably be changed to array of preknown size steps_to_thread_end - begin_thread_at_step
-/*constexpr*/ DonutFrame map_out_results(std::vector<RenderCoordinates> const& results) {
+template <int total_steps>
+constexpr DonutFrame map_out_results(std::array<RenderCoordinates, total_steps> const& results) {
   auto ascii = ascii_init_copy;
   auto zbuffer = zbuffer_init_copy;
   auto lum = lum_init_copy;
 
-  for (const auto& result : results) {
+  for (const RenderCoordinates& result : results) {
     // Use result.L, result.ooz, result.xp, result.yp to calculate ascii and lum
     if (result.L > -1) {
       // test against the z-buffer. larger 1/z means the pixel is
@@ -273,38 +284,60 @@ struct RenderCoordinates {
   return std::make_pair(ascii, lum);
 };
 
-DonutFrame render_frame(RenderParams const& p, uint8_t thread_count) {
-  std::vector<std::future<std::vector<RenderCoordinates>>> futures;
-  for (uint8_t i = 0; i < thread_count; ++i) {
+constexpr int calc_total_steps() {
+
+  const float theta_range = 2.0F * M_PI;
+  const float phi_range = theta_range;
+  const int num_theta_steps = static_cast<int>(std::ceil(theta_range / theta_spacing));
+  const int num_phi_steps = static_cast<int>(std::ceil(phi_range / phi_spacing));
+  return num_theta_steps * num_phi_steps;
+}
+
+template <unsigned int thread_count>
+DonutFrame render_frame(RenderParams const& p) {
+  constexpr int total_steps{calc_total_steps()};
+  constexpr int steps_per_thread = total_steps / thread_count;
+  std::vector<std::future<std::array<RenderCoordinates, steps_per_thread>>> futures;
+  for (uint16_t thread_idx = 0; thread_idx < thread_count; ++thread_idx) {
     // Launch a new thread
-    futures.push_back(std::async(std::launch::async, compute_render_coordinates, p, i, thread_count));
+    int steps_to_thread_end = (thread_idx + 1) * steps_per_thread;
+    int begin_thread_at_step = thread_idx * steps_per_thread;
+    futures.push_back(
+        std::async(std::launch::async, [steps_per_thread, &p, steps_to_thread_end, begin_thread_at_step]() {
+          return compute_render_coordinates<steps_per_thread>(p, steps_to_thread_end, begin_thread_at_step);
+        }));
   }
+
   // Join the results
-  std::vector<RenderCoordinates> results;
+  std::array<RenderCoordinates, total_steps> results;
+  uint8_t i{0};
   for (auto& future : futures) {
-    auto result = future.get();
-    results.insert(results.end(), result.begin(), result.end());
+    auto one_thread_computation = future.get();
+    std::copy(one_thread_computation.begin(), one_thread_computation.end(), results.begin() + i * steps_per_thread);
+    i++;
   }
 
-  return map_out_results(results);
+  return map_out_results<total_steps>(results);
 }
 
-/*constexpr*/ DonutFrame render_frame(RenderParams const& p) {
-  return map_out_results(compute_render_coordinates(p));
+constexpr DonutFrame render_frame_single_thread(RenderParams const& p) {
+  constexpr int total_steps{calc_total_steps()};
+  return map_out_results<total_steps>(compute_render_coordinates<total_steps>(p, total_steps, 0));
 }
 
-/*constexpr*/ DonutStorage render_a_rotating_donut() {
+constexpr DonutStorage render_a_rotating_donut() {
   DonutStorage out;
 
   float A{0}, A_ls{0}, B{0};
-  float i{0};
+  int i{0};
   for (float inc_cum{0.0}; inc_cum < radians_one_cycle; inc_cum += inc) {
     A_ls += inc * kA_ls;
     A += inc * kA;
     B += inc * kB;
     float Lx = cos(A_ls);
     float Ly = sin(A_ls);
-    out[i] = render_frame(RenderParams{A, B, Lx, Ly});
+    RenderParams params{A, B, Lx, Ly};
+    out[i] = render_frame_single_thread(params);
     i++;
   }
 
@@ -324,6 +357,14 @@ void asciiDisplayPoints(Ascii const& ascii) {
   }
 }
 
+struct Args {
+  enum class ProcessingMode { startup_time, run_time, run_time_multi };
+  ProcessingMode processing_mode = ProcessingMode::startup_time;
+
+  enum class DisplayMode { ascii, opengl };
+  DisplayMode display_mode = DisplayMode::opengl;
+};
+
 template <typename Type>
 class RunningStatistics {
  public:
@@ -342,6 +383,13 @@ class RunningStatistics {
     mean = (mean * count_m1 + new_val) / count;
   }
 
+  void print(Args args, std::string name = "RunningStatistics") {
+    std::cout << std::endl << name << std::endl;
+    std::cout << "Mean: " << mean << "\nMin: " << min << "\nMax: " << max << "\nStdDev: " << std_dev
+              << "\n\nAvailable threads: " << std::thread::hardware_concurrency() << "\nUsed threads: "
+              << (args.processing_mode == Args::ProcessingMode::run_time_multi ? kUsedThreadCount : 1) << std::endl;
+  }
+
   void print(std::string name = "RunningStatistics") {
     std::cout << std::endl << name << std::endl;
     std::cout << "Mean: " << mean << "\nMin: " << min << "\nMax: " << max << "\nStdDev: " << std_dev << std::endl;
@@ -356,7 +404,8 @@ class RunningStatistics {
   Type std_dev;
 };
 
-void sleep_for_frequency_Hz(float frequency, std::chrono::time_point<std::chrono::high_resolution_clock> start_time) {
+void sleep_for_frequency_Hz(float frequency,
+                            std::chrono::time_point<std::chrono::high_resolution_clock> const& start_time, Args args) {
 
   auto target_cycle_time = std::chrono::duration<double>(1.0 / frequency);
   auto processing_time = std::chrono::high_resolution_clock::now() - start_time;
@@ -369,7 +418,7 @@ void sleep_for_frequency_Hz(float frequency, std::chrono::time_point<std::chrono
 
   static RunningStatistics stats{std::chrono::duration_cast<std::chrono::microseconds>(processing_time).count()};
   stats.update(std::chrono::duration_cast<std::chrono::microseconds>(processing_time).count());
-  stats.print("#####  Statistics for processing time [ms]  #####");
+  stats.print(args, "#####  Statistics for processing time [ms]  #####");
 
   // Sleep for the computed time
   if (sleep_time_micros.count() > 0) {
@@ -378,13 +427,19 @@ void sleep_for_frequency_Hz(float frequency, std::chrono::time_point<std::chrono
   std::cout << "\033[2J\033[1;1H";
 }
 
-struct Args {
-  enum class ProcessingMode { startup_time, run_time, run_time_multi };
-  ProcessingMode processing_mode = ProcessingMode::startup_time;
+void thread_sleep_for_frequency_Hz(float frequency,
+                                   std::chrono::time_point<std::chrono::high_resolution_clock> const& start_time) {
 
-  enum class DisplayMode { ascii, opengl };
-  DisplayMode display_mode = DisplayMode::opengl;
-};
+  auto target_cycle_time = std::chrono::duration<double>(1.0 / frequency);
+  auto processing_time = std::chrono::high_resolution_clock::now() - start_time;
+  auto sleep_time_micros = std::chrono::duration_cast<std::chrono::microseconds>(target_cycle_time - processing_time);
+
+  // Sleep for the computed time
+  if (sleep_time_micros.count() > 0) {
+    std::this_thread::sleep_for(sleep_time_micros);
+  }
+  std::cout << "\033[2J\033[1;1H";
+}
 
 void print_options() {
   std::cout << "Options:\n"
@@ -447,11 +502,15 @@ void run_time_multi(ThreadData& td) {
     td.cv_worker.wait(temp_lock);  // Sync first cycle
   }
 
+  auto start_time{std::chrono::high_resolution_clock::now()};
   while (!td.finished) {
-    // Render frame is so slow it should not wait
+    thread_sleep_for_frequency_Hz(frame_frequency, start_time);
+    // Render frame should be so slow it should not wait for main. If both wait for each other, they can't execute at the same time
+    start_time = std::chrono::high_resolution_clock::now();
+
     index = (index + 1) % 2;  // Move to the next index in the ring buffer
-    td.data_out[index] = render_frame(td.data_in[index], std::thread::hardware_concurrency());  // 1 0 1 0
-    td.cv_main.notify_one();  // Notify renderer about new data
+    td.data_out[index] = render_frame<kUsedThreadCount>(td.data_in[index]);  // 1 0 1 0
+    td.cv_main.notify_one();                                                 // Notify renderer about new data
   }
 }
 
@@ -464,6 +523,7 @@ int main(int argc, char* const argv[]) {
   DonutFrame runtime_donut_frame;
   std::function<bool(int, DonutFrame const&)> display_func;
   std::function<DonutFrame const&(float, int)> compute_donut;
+  increase_process_stack_limit(kProcessStackLimit_MB);
 
   switch (args.processing_mode) {
     case Args::ProcessingMode::run_time:
@@ -473,7 +533,7 @@ int main(int argc, char* const argv[]) {
         float B = inc_sum * kB;
         float Lx = cos(A_ls);
         float Ly = sin(A_ls);
-        runtime_donut_frame = render_frame(RenderParams{A, B, Lx, Ly});
+        runtime_donut_frame = render_frame_single_thread(RenderParams{A, B, Lx, Ly});
         return runtime_donut_frame;
       };
       break;
@@ -502,8 +562,12 @@ int main(int argc, char* const argv[]) {
       };
       break;
     case Args::ProcessingMode::startup_time:
+      // Not enough global .data memory on normal computers, so using heap :)))
+      // static std::unique_ptr<DonutStorage> asciis_and_lums{std::make_unique<DonutStorage>(render_a_rotating_donut())};
+      static DonutStorage asciis_and_lums{render_a_rotating_donut()};
       compute_donut = [](float, int i) -> DonutFrame const& {
-        return asciis_and_lums[i];
+        // return asciis_and_lums->at(i);
+        return asciis_and_lums.at(i);
       };
       break;
   }
@@ -536,7 +600,7 @@ int main(int argc, char* const argv[]) {
         goto terminate;
       }
 
-      sleep_for_frequency_Hz(frame_frequency, start_time);
+      sleep_for_frequency_Hz(frame_frequency, start_time, args);
     }
   }
 
