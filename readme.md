@@ -21,7 +21,7 @@ C++20 can't compute these huge data structures at compile-time on my computer be
 
 // TODO compute while running the rendering multithreaded.
 
-### Results for OpenGL
+### Results for OpenGL for splitting rendering and visualization into 1 thread each
 | Processing time [ms] 	| Mean    	|
 |----------------------	|---------	|
 | run_time             	| ~110000 	|
@@ -31,10 +31,20 @@ C++20 can't compute these huge data structures at compile-time on my computer be
 Doing the rendering in a separate thread is only slightly faster, since visualizing with opengl only takes about ~1/10 of the time.
 The rendering itself should be split into multiple threads.
 
+### Comparison for rendering in all available threads
+Lower resolution required after rewriting program to use less heap or it memory overflows.
+Should just go back to commit 917eafd11a1e159b802f127a2eb6d00e5f4585eb and reserve
+
+| Mean processing time [ms] | Debug    	| Release  |
+|--------------------------	|---------	| ---------|
+| run_time                	| ~20057 	|          |
+| run_time_multi        	| ~14391 	|          |
+| startup_time          	| ~6099  	|          |
+
 ### Build
 
 ```bash
-mkdir -p build && cd build; cmake .. && make
+mkdir -p build && cd build; cmake .. && make -j
 ```
 
 ### Run
@@ -45,4 +55,4 @@ mkdir -p build && cd build; cmake .. && make
 - Add raytracing and a mirror to opengl rendering
 - Optimize render_frame to reduce amount of operations used to be able to compute more frames during compilation
 - Improve compile speed by using Bazel
-- (Maybe) Make resolution an argument
+- (Maybe) Make resolution an argumen

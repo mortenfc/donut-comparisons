@@ -505,11 +505,8 @@ int main(int argc, char* const argv[]) {
       };
       break;
     case Args::ProcessingMode::startup_time:
-      // Not enough global .data memory on normal computers, so using heap :)))
-      // static std::unique_ptr<DonutStorage> asciis_and_lums{std::make_unique<DonutStorage>(render_a_rotating_donut())};
       static DonutStorage asciis_and_lums{render_a_rotating_donut()};
       compute_donut = [](float, int i) -> DonutFrame const& {
-        // return asciis_and_lums->at(i);
         return asciis_and_lums.at(i);
       };
       break;
